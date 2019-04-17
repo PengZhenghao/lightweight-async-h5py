@@ -10,24 +10,33 @@ Example usage:
 1. Run the data collector for nearly half hour:
 
 ```
-    python collect_data.py --exp-name 0101-Trimaran-Tracking --timestep 18000
+    python recorder.py --exp-name example --timestep 180
 ```
 
 or
 
 ```
-    python collect_data.py --exp-name 0101-Trimaran-Tracking -t 18000
+    python recorder.py --exp-name example -t 180
 ```
- 
-2. Run the data collector for not pre-defined time duration:
+
+2. Run the data collector without pre-defining the time duration:
 
 ```
-    python collect_data.py --exp-name 0101-Trimaran-Tracking
+    python recorder.py --exp-name example_infinite_time
 ```
  
 (Note that you should press Ctrl+C to terminate this program!)
 
-3. Load the stored data:
+3. Run program with extra arguments:
+
+```
+    --monitoring (-m): use opencv to show the live video
+    --sync (-s): use the sync version of the Recorder
+    --use-h5py-video-writer (-u): write each frame of video to h5 file (This will cause extremely large file and slow down the whole program.)
+    --log-level: choose from ["WARNING", "INFO", "DEBUG"], determine the verbosity.
+```
+
+4. Load the stored data:
 
 ```
 # This is a python script
@@ -36,18 +45,14 @@ from recorder import Recorder
 config = {"exp_name": "example", "save_dir": "examples", "use_video_writer": False}
 r = Recorder(config)
 data = r.read()
-lidar_data = data["lidar_data"]
-frames = data["frame"]
-extra_data = data["extra_data"]
+lidar_data = data["lidar_data"][:]
+frames = data["frame"][:]
+extra_data = data["extra_data"][:]
 
 print("lidar_data contains {} and its shape is {}.".format(lidar_data, lidar_data.shape))
+print("frame means for each datapoint {}.".format(frames.mean(1).mean(1).mean(1)))
 
-import cv2
-
-for i in frames:
-    cv2.imshow("example", i)
-    cv2.waitKey(50)
-cv2.destroyAllWindows()
+r.display()
 ```
 
 
