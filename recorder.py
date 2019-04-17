@@ -1,14 +1,15 @@
-from utils import get_formatted_time
-import time
-import logging
-import numpy as np
 import json
-import uuid
+import logging
+import logging.handlers
+import multiprocessing
+import os
+import time
 
 import h5py
-import logging.handlers
-import os
+import numpy as np
+
 from config import RecorderConfig
+from utils import get_formatted_time
 
 try:
     import cv2
@@ -257,6 +258,40 @@ class Recorder(object):
             time.time() - self.created_timestamp))
 
 
+class AsyncRecorder(object):
+    default_config = RecorderConfig().metadata
+
+    def __init__(self, config=None, logger=None, monitoring=False):
+        self.log_queue = multiprocessing.Queue()
+        self.data_queue = multiprocessing.Queue()
+
+        self.default_config.update(config)
+        self.config = self.default_config
+
+        self.monitoring = monitoring
+        self.recorder_process = multiprocessing.Process(target=build_recorder_process, args=(
+            self.config, self.data_queue, self.log_queue, self.config["log_level"], monitoring))
+        self.recorder_process.start()
+
+        self.now = time.time()
+        self.cnt = 0
+        self.log_interval = 10 if "log_interval" not in self.config else self.config["log_interval"]
+
+    def add(self, data_dict):
+        self.data_queue.put(data_dict)
+
+        if self.cnt % self.log_interval == 0:
+            logging.info("Data processed in frequency {}. Press Ctrl+C to terminate this program!".format(
+                self.log_interval / (time.time() - self.now)))
+            self.now = time.time()
+        self.cnt += 1
+
+    def close(self):
+        self.data_queue.put(None)
+        self.recorder_process.join()
+        logging.info("Async Recorder Terminated!")
+
+
 def build_recorder_process(config, data_queue, log_queue, log_level, monitoring=False):
     qh = logging.handlers.QueueHandler(log_queue)
     logger = logging.getLogger()
@@ -282,8 +317,8 @@ def build_recorder_process(config, data_queue, log_queue, log_level, monitoring=
 
 
 def test_generated_data():
-    import uuid
-    # filename = "tmp_{}".format(uuid.uuid4())
+    # import uuid
+    # # filename = "tmp_{}".format(uuid.uuid4())
     filename = "example_external_video_writer"
     config = {"exp_name": filename,
               "buffer_size": 5,
@@ -306,10 +341,14 @@ def test_generated_data():
     return filename
 
 
-def test_display_and_read(filename):
+def test_display_and_read(filepath):
+    save_dir, _ = os.path.split(filepath)
+    save_dir, filename = os.path.split(save_dir)
+    if save_dir == "":
+        save_dir = "."
     config = {"exp_name": filename,
               "buffer_size": 5,
-              "save_dir": 'examples',
+              "save_dir": save_dir,
               "compress": "gzip",
               "dataset_names": ("lidar_data", "extra_data", "frame", "timestamp"),
               "dataset_dtypes": {"lidar_data": "uint16", "extra_data": "float32", "frame": "uint8",
@@ -320,7 +359,8 @@ def test_display_and_read(filename):
               }
     r = Recorder(config, monitoring=True)
     d = r.read()
-    print(d)
+    print("data: ", d)
+    print("lidar_data means {}".format(d["lidar_data"][:].mean(1)))
     r.display()
     r.close()
 
@@ -337,10 +377,95 @@ def test_opencv():
     out.release()
 
 
+def test_async_recorder():
+    import uuid
+    filename = "tmp_{}".format(uuid.uuid4())
+    st = time.time()
+    cnt = 0
+
+    arecorder = AsyncRecorder(config={"exp_name": filename, "save_dir": "tmp"}, monitoring=True)
+
+    logging.info("Start Record Data!")
+    for _ in range(10000):
+        logging.debug("The {} iteration!".format(cnt))
+
+        data_dict = {}
+        data_dict["frame"] = np.random.randint(low=0, high=256, size=(960, 1280, 3), dtype=np.uint8)
+        data_dict["lidar_data"] = np.random.randint(low=0, high=30000, size=(30600,), dtype=np.uint16)
+        data_dict["extra_data"] = np.random.random(size=(8,)).astype(np.float64)
+
+        arecorder.add(data_dict)
+        cnt += 1
+    et = time.time()
+    logging.info("Recording Finish! It take {} seconds and collect {} data! Average FPS {}.".format(et - st, cnt,
+                                                                                                    cnt / (
+                                                                                                        et - st)))
+    arecorder.close()
+
+
+"""
+Example Usages: 
+1. Run the data collector for nearly half hour:
+
+    python recorder.py --exp-name example --timestep 18000
+
+or
+
+    python recorder.py --exp-name example -t 18000
+
+2. Run the data collector without pre-defining the time duration:
+
+    python recorder.py --exp-name example_infinite_time
+
+(Note that you should press Ctrl+C to terminate this program!)
+
+3. Run program with extra arguments:
+    
+    --monitoring (-m): use opencv to show the live video
+    --sync (-s): use the sync version of the Recorder
+    --use-h5py-video-writer (-u): write each frame of video to h5 file (This will cause extremely large file and slow down the whole program.)
+
+"""
+
 if __name__ == '__main__':
+    import argparse
     from utils import setup_logger
 
-    log_level = "DEBUG"
-    setup_logger(log_level, 'recorder')
-    filename = test_generated_data()
-    test_display_and_read(filename)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--exp-name", default=None, type=str)
+    parser.add_argument("--log-level", default="INFO", type=str)
+    parser.add_argument("--timestep", "-t", default=-1, type=int)
+    parser.add_argument("--monitoring", '-m', action="store_true", default=False)
+    parser.add_argument("--sync", '-s', action="store_true", default=False)
+    parser.add_argument("--use-h5py--video-writer", '-u', action="store_true", default=False)
+    args = parser.parse_args()
+
+    setup_logger(args.log_level)
+    cnt = 0
+
+    # build the recorder
+    import uuid
+
+    filename = "untitled_{}".format(uuid.uuid4())
+
+    if args.sync:
+        recorder = Recorder(config={"exp_name": filename, "save_dir": "tmp"}, monitoring=True)
+    else:
+        recorder = AsyncRecorder(config={"exp_name": filename, "save_dir": "tmp"}, monitoring=True)
+
+    try:
+        logging.info("Start Record Data!")
+        while True:
+            logging.debug("The {} iteration!".format(cnt))
+
+            # Build your data here, no matter from camera, lidar, or other sensors.
+            data_dict = {}
+            data_dict["frame"] = np.random.randint(low=0, high=256, size=(960, 1280, 3), dtype=np.uint8)
+            data_dict["lidar_data"] = np.random.randint(low=0, high=30000, size=(30600,), dtype=np.uint16)
+            data_dict["extra_data"] = np.random.randint(0, 1000, size=(8,), dtype=np.float64)
+
+            cnt += 1
+            if cnt == args.timestep:
+                break
+    finally:
+        recorder.close()
