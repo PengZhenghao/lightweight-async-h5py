@@ -1,1 +1,1 @@
-from recorder import Recorder, AsyncRecorder
+from .recorder import Recorder, AsyncRecorder
