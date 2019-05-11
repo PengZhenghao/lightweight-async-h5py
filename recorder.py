@@ -115,7 +115,7 @@ class Recorder(object):
                 self.file.attrs[
                     "video_file_name"] = self.videofile if self.videofile else self.filename
                 config = json.dumps(config)
-                self.file.attrs['config'] = config
+                self.file.attrs['lidar_config'] = config
                 ds_names = json.dumps(self.dataset_names)
                 self.file.attrs["dataset_names"] = ds_names
 
